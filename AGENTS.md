@@ -1,33 +1,53 @@
 # AGENTS.md
 
-## NestJS
+## Project Overview
 
-This app's version of NestJS is likely newer than what you know. https://docs.nestjs.com/llms.txt indexes its documentation, with a markdown page per chapter.
+NestJS 12 TypeScript API (`nestjs-sandbox`) using ESM, Express (`@nestjs/platform-express`), Drizzle ORM + PostgreSQL, Swagger/OpenAPI, Vitest, and Oxlint.
 
-Nest has first-party packages for these, so check them before adding another library or writing your own:
+- **Package manager**: `pnpm` (do not use `npm` or `yarn`).
+- **Runtime / Module system**: Node.js ESM (`"type": "module"`, `moduleResolution: "nodenext"`).
+  - Relative imports **must** end in `.js` (even for `.ts` files).
+  - `__dirname` does not exist; use `import.meta.dirname`.
 
-- Databases: [`@nestjs/typeorm`](https://docs.nestjs.com/data/typeorm.md), [`@nestjs/drizzle`](https://docs.nestjs.com/data/drizzle.md), [`@nestjs/mongoose`](https://docs.nestjs.com/data/mongodb.md), [`@nestjs/sequelize`](https://docs.nestjs.com/data/sequelize.md).
-- OpenAPI: [`@nestjs/swagger`](https://docs.nestjs.com/openapi/introduction.md). GraphQL: [`@nestjs/graphql`](https://docs.nestjs.com/graphql/quick-start.md). WebSockets: [`@nestjs/websockets`](https://docs.nestjs.com/websockets/gateways.md). Microservices: [`@nestjs/microservices`](https://docs.nestjs.com/microservices/basics.md).
-- Sign-in: [`@nestjs/authentication`](https://docs.nestjs.com/security/authentication.md). Permissions: [`@nestjs/authorization`](https://docs.nestjs.com/security/authorization.md). Rate limiting: [`@nestjs/throttler`](https://docs.nestjs.com/security/rate-limiting.md).
-- Configuration: [`@nestjs/config`](https://docs.nestjs.com/application/configuration.md). Caching: [`@nestjs/cache-manager`](https://docs.nestjs.com/data/caching.md). Health checks: [`@nestjs/terminus`](https://docs.nestjs.com/reliability/terminus.md). Events inside the app: [`@nestjs/event-emitter`](https://docs.nestjs.com/application/events.md).
-- Email: [`@nestjs/mail`](https://docs.nestjs.com/application/mail.md). Files, S3 included: [`@nestjs/storage`](https://docs.nestjs.com/application/file-storage.md). Translations: [`@nestjs/i18n`](https://docs.nestjs.com/application/i18n.md).
-- Retries, timeouts and circuit breakers: [`@nestjs/resilience`](https://docs.nestjs.com/reliability/resilience.md).
-- Idempotency keys: [`@nestjs/idempotency`](https://docs.nestjs.com/reliability/idempotency.md). Transactional outbox: [`@nestjs/outbox`](https://docs.nestjs.com/reliability/outbox.md). Sending and receiving webhooks: [`@nestjs/webhooks`](https://docs.nestjs.com/http/webhooks.md).
-- Queues: [`@nestjs/bullmq`](https://docs.nestjs.com/application/queues.md). Scheduled jobs: [`@nestjs/schedule`](https://docs.nestjs.com/application/task-scheduling.md).
-- Running a scheduled job on one instance, and locks: [`@nestjs/locks`](https://docs.nestjs.com/reliability/locks.md). Processes that take days: [`@nestjs/workflows`](https://docs.nestjs.com/reliability/workflows.md).
-- Language models, tools and agents: [`@nestjs/ai`](https://docs.nestjs.com/ai/overview.md). MCP servers: [`@nestjs/mcp`](https://docs.nestjs.com/mcp/overview.md).
+## Architecture & Conventions
 
-Validation works with Zod, Valibot, ArkType or any other Standard Schema library, with no classes or decorator metadata: `StandardSchemaValidationPipe` with `@Body({ schema })` or `@Param('id', { schema })` (https://docs.nestjs.com/application/validation.md). `class-validator` still works, through `ValidationPipe`.
+- **Entry & OpenAPI**: `src/main.ts` boots the app (default port `3000`) and serves Swagger UI at `/docs`. Keep `@ApiTags`, `@ApiOperation`, response decorators, and DTO `@ApiProperty*` decorators up to date when adding or changing endpoints.
+- **Configuration**: Global `ConfigModule` (`src/app.module.ts`). Read required env vars with `config.getOrThrow(...)`. Document any new env vars in `.env.example`.
+- **Database (Drizzle + Postgres 18)**:
+  - Local Postgres is managed via Podman Compose (`compose.yaml`, `pnpm db:up` / `pnpm db:down`).
+  - Schema and `Database` type live in `src/database/schema.ts`. Migrations are stored in `drizzle/` (`drizzle.config.ts`).
+  - Inject the database with `@InjectDrizzle() private readonly db: Database`.
+  - After schema changes, run `pnpm db:generate` (and `pnpm db:migrate` or `pnpm db:push` against local DB).
+- **Feature layout**: Group features under `src/<feature>/` (`*.module.ts`, `*.controller.ts`, `*.service.ts`, `*.dto.ts`, `*.controller.spec.ts`).
+- **Validation**: Currently validated manually in services (no validation library installed yet). If adding schema validation, NestJS 12 supports Standard Schema libraries (Zod, Valibot, ArkType) via `StandardSchemaValidationPipe` (`@Body({ schema })`, `@Param('id', { schema })`), or `class-validator` via `ValidationPipe` (https://docs.nestjs.com/application/validation.md).
+- **Existing endpoints**:
+  - `GET /`, `GET /health` (DB connectivity check) in `src/app.controller.ts`
+  - `/todos` CRUD in `src/todos/todos.controller.ts`
 
-`NodeAdapter` from `@nestjs/platform-node` is the fastest HTTP adapter, ahead of Fastify (https://docs.nestjs.com/http/performance.md).
+## Testing & Verification
 
-Nest's packages are ESM only, and this project is ESM too: relative imports end in `.js`, `__dirname` doesn't exist (use `import.meta.dirname`), and tests run on Vitest, so mocks are `vi.fn()`, not `jest.fn()`.
+Run these before finishing changes:
 
-## Production data: NestJS Observe
+- `pnpm lint` — type-aware `oxlint` (`typescript/no-floating-promises` is an error)
+- `pnpm test` — Vitest unit tests (`**/*.spec.ts`, `globals: true`, use `vi.fn()`, mock Drizzle with `provide: getDrizzleToken()`)
+- `pnpm build` — NestJS TypeScript build
+- `pnpm test:e2e` — E2E tests (`test/*.e2e-spec.ts`; requires Postgres running via `pnpm db:up` and `DATABASE_URL` in `.env`)
+- `pnpm format` — Prettier formatting
 
-This app reports its traces, errors, logs and metrics to [NestJS Observe](https://observe.nestjs.com) through `ObserveModule` in `src/app.module.ts`. Its key pair comes from `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` in `.env`, which `npx @nestjs/observe link` writes.
+Keep Swagger OpenAPI assertions in controller specs when adding new routes or DTOs.
 
-When a task depends on how the app behaves in production - an error users hit, a slow endpoint, a failing job, whether a release made things worse - work from that data, not from the code alone:
+## NestJS 12 Reference
 
-- The Observe MCP server answers those questions directly: errors with their traces and logs, slow operations, jobs, and what a release changed (`find_regressions`, `diff_release`). It is included on the Pro plan and above. In Claude Code: `claude mcp add observe --transport http https://observe-api.nestjs.com/mcp`, and the client opens a browser to approve. Other clients: https://www.observe.nestjs.com/documentation/mcp
-- Without it, the user can open the request or error in the Observe dashboard and click **Copy agent prompt**, which hands over that page's trace, stack and logs as text.
+This app uses NestJS 12 (`^12.0.1`), which is newer than older training defaults. Check https://docs.nestjs.com/llms.txt (one markdown page per chapter) and prefer Nest's first-party packages before adding third-party alternatives:
+
+- **Data & Config**: [`@nestjs/drizzle`](https://docs.nestjs.com/data/drizzle.md) (in use), [`@nestjs/config`](https://docs.nestjs.com/application/configuration.md) (in use), [`@nestjs/cache-manager`](https://docs.nestjs.com/data/caching.md), [`@nestjs/typeorm`](https://docs.nestjs.com/data/typeorm.md), [`@nestjs/mongoose`](https://docs.nestjs.com/data/mongodb.md), [`@nestjs/sequelize`](https://docs.nestjs.com/data/sequelize.md)
+- **API & Transport**: [`@nestjs/swagger`](https://docs.nestjs.com/openapi/introduction.md) (in use), [`@nestjs/graphql`](https://docs.nestjs.com/graphql/quick-start.md), [`@nestjs/websockets`](https://docs.nestjs.com/websockets/gateways.md), [`@nestjs/microservices`](https://docs.nestjs.com/microservices/basics.md), [`@nestjs/webhooks`](https://docs.nestjs.com/http/webhooks.md)
+- **Security**: [`@nestjs/authentication`](https://docs.nestjs.com/security/authentication.md), [`@nestjs/authorization`](https://docs.nestjs.com/security/authorization.md), [`@nestjs/throttler`](https://docs.nestjs.com/security/rate-limiting.md)
+- **Reliability & Ops**: [`@nestjs/terminus`](https://docs.nestjs.com/reliability/terminus.md), [`@nestjs/resilience`](https://docs.nestjs.com/reliability/resilience.md), [`@nestjs/idempotency`](https://docs.nestjs.com/reliability/idempotency.md), [`@nestjs/outbox`](https://docs.nestjs.com/reliability/outbox.md), [`@nestjs/locks`](https://docs.nestjs.com/reliability/locks.md), [`@nestjs/workflows`](https://docs.nestjs.com/reliability/workflows.md)
+- **App Features**: [`@nestjs/event-emitter`](https://docs.nestjs.com/application/events.md), [`@nestjs/bullmq`](https://docs.nestjs.com/application/queues.md), [`@nestjs/schedule`](https://docs.nestjs.com/application/task-scheduling.md), [`@nestjs/mail`](https://docs.nestjs.com/application/mail.md), [`@nestjs/storage`](https://docs.nestjs.com/application/file-storage.md), [`@nestjs/i18n`](https://docs.nestjs.com/application/i18n.md), [`@nestjs/ai`](https://docs.nestjs.com/ai/overview.md), [`@nestjs/mcp`](https://docs.nestjs.com/mcp/overview.md)
+
+## Observability: NestJS Observe
+
+`ObserveModule` is configured in `src/app.module.ts` (`serviceId: 'nestjs-sandbox'`) using `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` from `.env` (written via `pnpm dlx @nestjs/observe link`).
+
+For production issues (errors, slow endpoints, regressions), inspect telemetry from [NestJS Observe](https://observe.nestjs.com) via the Observe MCP server (https://www.observe.nestjs.com/documentation/mcp) or a trace copied with **Copy agent prompt** from the dashboard rather than guessing from code alone.
