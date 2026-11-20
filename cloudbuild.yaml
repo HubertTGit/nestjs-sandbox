@@ -1,0 +1,9 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'europe-west2-docker.pkg.dev/$PROJECT_ID/nestjs-sandbox/nestjs-app:$SHORT_SHA'
+      - '.'
+images:
+  - 'europe-west2-docker.pkg.dev/$PROJECT_ID/nestjs-sandbox/nestjs-app:$SHORT_SHA'
