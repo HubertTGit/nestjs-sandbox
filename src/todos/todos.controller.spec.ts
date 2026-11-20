@@ -140,11 +140,12 @@ describe('TodosController', () => {
     );
   });
 
-  it('exposes todos endpoints and DTO schemas in OpenAPI document', async () => {
+  it('exposes todos endpoints, DTO schemas, and Bearer auth in OpenAPI document', async () => {
     const nestApp = app.createNestApplication();
     const config = new DocumentBuilder()
       .setTitle('NestJS Sandbox API')
       .setVersion('1.0')
+      .addBearerAuth()
       .build();
     const document = SwaggerModule.createDocument(nestApp, config);
 
@@ -154,6 +155,16 @@ describe('TodosController', () => {
     expect(document.components?.schemas).toHaveProperty('CreateTodoDto');
     expect(document.components?.schemas).toHaveProperty('UpdateTodoDto');
     expect(document.components?.schemas).toHaveProperty('TodoDto');
+
+    expect(document.paths['/todos']?.get?.security).toBeUndefined();
+    expect(document.paths['/todos/{id}']?.get?.security).toBeUndefined();
+    expect(document.paths['/todos']?.post?.security).toEqual([{ bearer: [] }]);
+    expect(document.paths['/todos/{id}']?.patch?.security).toEqual([
+      { bearer: [] },
+    ]);
+    expect(document.paths['/todos/{id}']?.delete?.security).toEqual([
+      { bearer: [] },
+    ]);
 
     await nestApp.close();
   });

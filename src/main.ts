@@ -11,6 +11,7 @@ async function bootstrap() {
     .setTitle('NestJS Sandbox API')
     .setDescription('Todos CRUD API documentation')
     .setVersion('1.0')
+    .addBearerAuth()
     .build();
 
   const documentFactory = () =>

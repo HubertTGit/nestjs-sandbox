@@ -26,10 +26,14 @@ Copy `.env.example` to `.env`:
 cp .env.example .env
 ```
 
-Default `.env` contents:
+Default `.env` contents (update the Google OAuth credentials and generate a secret of at least 32 bytes with `openssl rand -base64 32`):
 
 ```env
 DATABASE_URL=postgresql://postgres:password@localhost:5432/mydb
+APP_URL=http://localhost:3000
+GOOGLE_CLIENT_ID=<your-google-client-id>
+GOOGLE_CLIENT_SECRET=<your-google-client-secret>
+JWT_SECRET=<at-least-32-byte-secret>
 ```
 
 Optional environment variables:
@@ -94,28 +98,49 @@ curl http://localhost:3000/health
 # {"status":"ok"}
 ```
 
+- **Authenticate with Google OIDC to get a Bearer token**:
+
+  Open [http://localhost:3000/auth/oidc/google/login](http://localhost:3000/auth/oidc/google/login) in a browser → sign in with Gmail → copy the returned `accessToken`.
+
 - **Create and list todos**:
+
+  Without a token → `401 Unauthorized`:
+
+```bash
+curl -i -X POST http://localhost:3000/todos \
+  -H "Content-Type: application/json" \
+  -d '{"task":"Buy milk"}'
+```
+
+  With the Bearer `accessToken`:
 
 ```bash
 curl -X POST http://localhost:3000/todos \
+  -H "Authorization: Bearer <accessToken>" \
   -H "Content-Type: application/json" \
   -d '{"task":"Buy milk"}'
 
+# Listing todos is publicly accessible
 curl http://localhost:3000/todos
 ```
 
 ## API Endpoints
 
-| Method   | Path         | Description                  |
-| -------- | ------------ | ---------------------------- |
-| `GET`    | `/`          | Hello World endpoint         |
-| `GET`    | `/health`    | Check database connectivity  |
-| `GET`    | `/docs`      | Interactive Swagger UI       |
-| `POST`   | `/todos`     | Create a todo                |
-| `GET`    | `/todos`     | List all todos               |
-| `GET`    | `/todos/:id` | Get a todo by ID             |
-| `PATCH`  | `/todos/:id` | Update a todo                |
-| `DELETE` | `/todos/:id` | Delete a todo                |
+| Method   | Path                          | Auth    | Description                                         |
+| -------- | ----------------------------- | ------- | --------------------------------------------------- |
+| `GET`    | `/`                           | Public  | Hello World endpoint                                |
+| `GET`    | `/health`                     | Public  | Check database connectivity                         |
+| `GET`    | `/docs`                       | Public  | Interactive Swagger UI                              |
+| `GET`    | `/auth/oidc/:provider/login`  | Public  | Initiate Google OAuth/OIDC sign-in                  |
+| `GET`    | `/auth/oidc/:provider/callback` | Public | Handle Google OAuth/OIDC callback                  |
+| `GET`    | `/auth/token`                 | Session | Issue a Bearer JWT access token for the session     |
+| `GET`    | `/auth/me`                    | Bearer  | Return the currently authenticated user             |
+| `POST`   | `/auth/logout`                | Session | End the current browser OAuth session               |
+| `POST`   | `/todos`                      | Bearer  | Create a todo                                       |
+| `GET`    | `/todos`                      | Public  | List all todos                                      |
+| `GET`    | `/todos/:id`                  | Public  | Get a todo by ID                                    |
+| `PATCH`  | `/todos/:id`                  | Bearer  | Update a todo                                       |
+| `DELETE` | `/todos/:id`                  | Bearer  | Delete a todo                                       |
 
 ## Testing, Linting & Formatting
 

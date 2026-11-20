@@ -1,3 +1,4 @@
+import { AuthenticationModule, google } from '@nestjs/authentication';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { DrizzleModule } from '@nestjs/drizzle';
@@ -5,6 +6,7 @@ import { createObserveModule } from '@nestjs/observe';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
+import { AuthModule } from './auth/auth.module.js';
 import { schema } from './database/schema.js';
 import { TodosModule } from './todos/todos.module.js';
 
@@ -23,6 +25,38 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
         schema,
       }),
     }),
+    AuthenticationModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
+        const appUrl = config.getOrThrow<string>('APP_URL').replace(/\/+$/, '');
+        const isHttps = appUrl.startsWith('https://');
+
+        return {
+          accessToken: {
+            key: config.getOrThrow<string>('JWT_SECRET'),
+            issuer: appUrl,
+            audience: 'nestjs-sandbox',
+            ttl: '15m',
+          },
+          refreshToken: false,
+          session: {
+            cookie: { secure: isHttps },
+          },
+          oidc: {
+            callbackUrl: `${appUrl}/auth/oidc/:provider/callback`,
+            redirectAfterLogin: '/auth/token',
+            cookie: { secure: isHttps },
+            providers: {
+              google: google({
+                clientId: config.getOrThrow<string>('GOOGLE_CLIENT_ID'),
+                clientSecret: config.getOrThrow<string>('GOOGLE_CLIENT_SECRET'),
+              }),
+            },
+          },
+        };
+      },
+    }),
+    AuthModule,
     TodosModule,
     // Distributed tracing, auto-correlated logs, request/job metrics, error
     // telemetry, alarms, and more — out of the box. Sign up at https://observe.nestjs.com,
