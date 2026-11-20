@@ -32,6 +32,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
         const isHttps = appUrl.startsWith('https://');
 
         return {
+          allowInMemoryStorage: true,
           accessToken: {
             key: config.getOrThrow<string>('JWT_SECRET'),
             issuer: appUrl,
