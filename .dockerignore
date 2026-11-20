@@ -1,0 +1,31 @@
+# Dependencies & build output
+node_modules
+dist
+coverage
+*.tsbuildinfo
+
+# Environment & secrets
+.env
+.env.*
+client_secret*.json
+
+# VCS, editor & local tooling
+.git
+.gitignore
+.gitattributes
+.agents
+.DS_Store
+.oxlintrc.json
+.prettierrc
+_tmp_*
+
+# Docs, tests & local compose
+README.md
+AGENTS.md
+compose.yaml
+Dockerfile
+.dockerignore
+test
+vitest.config.ts
+vitest.config.e2e.ts
+skills-lock.json
