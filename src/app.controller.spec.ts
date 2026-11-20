@@ -1,11 +1,13 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { getDrizzleToken } from '@nestjs/drizzle';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import type { Todo } from './database/schema.js';
 
 describe('AppController', () => {
+  let app: TestingModule;
   let appController: AppController;
 
   const sampleTodo: Todo = {
@@ -53,7 +55,7 @@ describe('AppController', () => {
       })),
     };
 
-    const app: TestingModule = await Test.createTestingModule({
+    app = await Test.createTestingModule({
       controllers: [AppController],
       providers: [
         AppService,
@@ -153,6 +155,26 @@ describe('AppController', () => {
       await expect(appController.deleteTodo(999)).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('swagger', () => {
+    it('generates OpenAPI document with todos CRUD endpoints', async () => {
+      const nestApp = app.createNestApplication();
+      const config = new DocumentBuilder()
+        .setTitle('NestJS Sandbox API')
+        .setVersion('1.0')
+        .build();
+      const document = SwaggerModule.createDocument(nestApp, config);
+
+      expect(Object.keys(document.paths)).toEqual(
+        expect.arrayContaining(['/', '/health', '/todos', '/todos/{id}']),
+      );
+      expect(document.components?.schemas).toHaveProperty('CreateTodoDto');
+      expect(document.components?.schemas).toHaveProperty('UpdateTodoDto');
+      expect(document.components?.schemas).toHaveProperty('TodoDto');
+
+      await nestApp.close();
     });
   });
 });

@@ -6,16 +6,7 @@ import {
 import { InjectDrizzle } from '@nestjs/drizzle';
 import { asc, eq, sql } from 'drizzle-orm';
 import { type Database, type Todo, todos } from './database/schema.js';
-
-export interface CreateTodoDto {
-  task: string;
-  isCompleted?: boolean;
-}
-
-export interface UpdateTodoDto {
-  task?: string;
-  isCompleted?: boolean;
-}
+import type { CreateTodoDto, UpdateTodoDto } from './todo.dto.js';
 
 @Injectable()
 export class AppService {
