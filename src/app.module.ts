@@ -39,7 +39,10 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
             audience: 'nestjs-sandbox',
             ttl: '15m',
           },
-          refreshToken: false,
+          refreshToken: {
+            ttl: '30d',
+            absoluteTtl: '90d',
+          },
           session: {
             cookie: { secure: isHttps },
           },

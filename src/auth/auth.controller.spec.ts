@@ -4,24 +4,30 @@ import {
   google,
   type OidcProfile,
   OidcService,
+  RefreshTokenError,
   SignInService,
   TokenService,
 } from '@nestjs/authentication';
 import {
+  BadRequestException,
   type ExecutionContext,
   Global,
   Module,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { getDrizzleToken } from '@nestjs/drizzle';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Test, type TestingModule } from '@nestjs/testing';
+import type { Response } from 'express';
 import type { User } from '../database/schema.js';
 import { TodosController } from '../todos/todos.controller.js';
 import { TodosModule } from '../todos/todos.module.js';
 import { AuthController } from './auth.controller.js';
 import { AuthModule } from './auth.module.js';
 import { AuthService } from './auth.service.js';
+import { DrizzleRefreshTokenStore } from './drizzle-refresh-token.store.js';
+import { GoogleIdTokenVerifier } from './google-id-token.verifier.js';
 import { GoogleOidcResolver } from './google-oidc.resolver.js';
 import { JwtAuthProvider } from './jwt-auth.provider.js';
 
@@ -48,11 +54,23 @@ function createHttpContext(
   return { context, request };
 }
 
+function createMockResponse(): {
+  res: Response;
+  append: ReturnType<typeof vi.fn>;
+} {
+  const append = vi.fn();
+  return {
+    res: { append } as unknown as Response,
+    append,
+  };
+}
+
 describe('AuthController & AuthModule', () => {
   let moduleRef: TestingModule;
   let authController: AuthController;
   let authService: AuthService;
   let authGuard: AuthenticationGuard;
+  let googleIdTokenVerifier: GoogleIdTokenVerifier;
   let googleResolver: GoogleOidcResolver;
   let jwtAuthProvider: JwtAuthProvider;
   let oidcService: OidcService;
@@ -100,20 +118,35 @@ describe('AuthController & AuthModule', () => {
 
     moduleRef = await Test.createTestingModule({
       imports: [
+        ConfigModule.forRoot({
+          isGlobal: true,
+          ignoreEnvFile: true,
+          load: [
+            () => ({
+              APP_URL: 'https://api.example.com',
+              GOOGLE_CLIENT_ID: 'test-google-client-id',
+              GOOGLE_ALLOWED_CLIENT_IDS: 'android-client-id,ios-client-id',
+            }),
+          ],
+        }),
         MockDrizzleModule,
         AuthenticationModule.forRoot({
+          allowInMemoryStorage: true,
           accessToken: {
             key: 'test-jwt-secret-key-at-least-32-bytes-long!!',
-            issuer: 'http://localhost:3000',
+            issuer: 'https://api.example.com',
             audience: 'nestjs-sandbox',
             ttl: '15m',
           },
-          refreshToken: false,
+          refreshToken: {
+            ttl: '30d',
+            absoluteTtl: '90d',
+          },
           session: {
             cookie: { secure: false },
           },
           oidc: {
-            callbackUrl: 'http://localhost:3000/auth/oidc/:provider/callback',
+            callbackUrl: 'https://api.example.com/auth/oidc/:provider/callback',
             redirectAfterLogin: '/auth/token',
             cookie: { secure: false },
             providers: {
@@ -127,13 +160,19 @@ describe('AuthController & AuthModule', () => {
         AuthModule,
         TodosModule,
       ],
-    }).compile();
+    })
+      // Let AuthenticationStorage use its in-memory refresh store in unit tests;
+      // DrizzleRefreshTokenStore is tested directly and via contract tests.
+      .overrideProvider(DrizzleRefreshTokenStore)
+      .useValue({})
+      .compile();
 
     await moduleRef.init();
 
     authController = moduleRef.get(AuthController);
     authService = moduleRef.get(AuthService);
     authGuard = moduleRef.get(AuthenticationGuard);
+    googleIdTokenVerifier = moduleRef.get(GoogleIdTokenVerifier);
     googleResolver = moduleRef.get(GoogleOidcResolver);
     jwtAuthProvider = moduleRef.get(JwtAuthProvider);
     oidcService = moduleRef.get(OidcService);
@@ -145,6 +184,130 @@ describe('AuthController & AuthModule', () => {
     if (moduleRef) {
       await moduleRef.close();
     }
+  });
+
+  it('authenticates with Google ID token and returns access + refresh tokens in JSON body', async () => {
+    vi.spyOn(googleIdTokenVerifier, 'verify').mockResolvedValueOnce({
+      subject: 'google-sub-123',
+      email: 'alice@gmail.com',
+      emailVerified: true,
+      name: 'Alice Smith',
+    });
+    returningMock.mockResolvedValueOnce([sampleUser]);
+
+    const result = await authController.googleSignIn(
+      { idToken: 'valid-google-id-token' },
+      undefined,
+    );
+
+    expect(result.accessToken.split('.')).toHaveLength(3);
+    expect(result.refreshToken).toEqual(expect.any(String));
+    expect(result.expiresIn).toBe(900);
+    expect(result.user).toEqual({
+      id: 42,
+      email: 'alice@gmail.com',
+      name: 'Alice Smith',
+    });
+  });
+
+  it('delivers refresh token via HttpOnly cookie when X-Auth-Transport is cookie', async () => {
+    vi.spyOn(googleIdTokenVerifier, 'verify').mockResolvedValueOnce({
+      subject: 'google-sub-123',
+      email: 'alice@gmail.com',
+      emailVerified: true,
+      name: 'Alice Smith',
+    });
+    returningMock.mockResolvedValueOnce([sampleUser]);
+    const { res, append } = createMockResponse();
+
+    const result = await authController.googleSignIn(
+      { idToken: 'valid-google-id-token' },
+      'cookie',
+      res,
+    );
+
+    expect(result.accessToken.split('.')).toHaveLength(3);
+    expect(result.refreshToken).toBeUndefined();
+    expect(append).toHaveBeenCalledWith(
+      'Set-Cookie',
+      expect.stringMatching(
+        /^refresh_token=[^;]+; Path=\/auth; HttpOnly; SameSite=Lax; Max-Age=2592000; Secure$/,
+      ),
+    );
+  });
+
+  it('rejects empty Google idToken with BadRequestException', async () => {
+    await expect(
+      authController.googleSignIn({ idToken: '   ' }, undefined),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rotates refresh token via JSON body and detects reuse', async () => {
+    const initial = await authService.issueAccessToken(
+      sampleUser,
+      'google:id_token',
+    );
+    whereMock.mockResolvedValueOnce([sampleUser]);
+
+    const rotated = await authController.refresh({
+      refreshToken: initial.refreshToken,
+    });
+
+    expect(rotated.accessToken.split('.')).toHaveLength(3);
+    expect(rotated.refreshToken).toEqual(expect.any(String));
+    expect(rotated.refreshToken).not.toBe(initial.refreshToken);
+    expect(rotated.user).toEqual({
+      id: 42,
+      email: 'alice@gmail.com',
+      name: 'Alice Smith',
+    });
+
+    // Reusing the already-rotated token fails and revokes the whole family.
+    await expect(
+      authController.refresh({ refreshToken: initial.refreshToken }),
+    ).rejects.toThrow(RefreshTokenError);
+
+    await expect(
+      authController.refresh({ refreshToken: rotated.refreshToken }),
+    ).rejects.toThrow(RefreshTokenError);
+  });
+
+  it('rotates refresh token from HttpOnly cookie and clears cookie on failure', async () => {
+    const initial = await authService.issueAccessToken(
+      sampleUser,
+      'google:id_token',
+    );
+    whereMock.mockResolvedValueOnce([sampleUser]);
+    const { res, append } = createMockResponse();
+
+    const rotated = await authController.refresh(
+      undefined,
+      `refresh_token=${encodeURIComponent(initial.refreshToken)}`,
+      undefined,
+      res,
+    );
+
+    expect(rotated.refreshToken).toBeUndefined();
+    expect(rotated.accessToken.split('.')).toHaveLength(3);
+    expect(append).toHaveBeenCalledWith(
+      'Set-Cookie',
+      expect.stringContaining('refresh_token='),
+    );
+
+    const failRes = createMockResponse();
+    await expect(
+      authController.refresh(
+        undefined,
+        'refresh_token=invalid-token',
+        'cookie',
+        failRes.res,
+      ),
+    ).rejects.toThrow(RefreshTokenError);
+
+    expect(failRes.append).toHaveBeenCalledWith(
+      'Set-Cookie',
+      'refresh_token=; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    );
   });
 
   it('delegates Google login to OidcService.start', async () => {
@@ -211,11 +374,12 @@ describe('AuthController & AuthModule', () => {
     expect(mockDb.insert).not.toHaveBeenCalled();
   });
 
-  it('issues a JWT access token for the authenticated user', async () => {
+  it('issues JWT access + refresh tokens for the authenticated session user', async () => {
     const result = await authController.issueToken(sampleUser);
 
     expect(result.accessToken).toEqual(expect.any(String));
     expect(result.accessToken.split('.')).toHaveLength(3);
+    expect(result.refreshToken).toEqual(expect.any(String));
     expect(result.expiresIn).toBe(900);
     expect(result.user).toEqual({
       id: 42,
@@ -232,13 +396,33 @@ describe('AuthController & AuthModule', () => {
     });
   });
 
-  it('signs out the session on /auth/logout', async () => {
+  it('revokes refresh token, clears cookie, and signs out browser session on /auth/logout', async () => {
+    const initial = await authService.issueAccessToken(
+      sampleUser,
+      'google:id_token',
+    );
     const signOutSpy = vi
       .spyOn(signInService, 'signOut')
       .mockResolvedValueOnce(true);
+    const { res, append } = createMockResponse();
 
-    await expect(authController.logout()).resolves.toBeUndefined();
+    await expect(
+      authController.logout(
+        undefined,
+        `refresh_token=${encodeURIComponent(initial.refreshToken)}`,
+        'cookie',
+        res,
+      ),
+    ).resolves.toBeUndefined();
+
     expect(signOutSpy).toHaveBeenCalledTimes(1);
+    expect(append).toHaveBeenCalledWith(
+      'Set-Cookie',
+      'refresh_token=; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=0; Secure',
+    );
+    await expect(
+      authController.refresh({ refreshToken: initial.refreshToken }),
+    ).rejects.toThrow(RefreshTokenError);
   });
 
   it('validates JWT claims against the users table in JwtAuthProvider', async () => {
@@ -300,6 +484,8 @@ describe('AuthController & AuthModule', () => {
 
     expect(Object.keys(document.paths)).toEqual(
       expect.arrayContaining([
+        '/auth/google',
+        '/auth/refresh',
         '/auth/oidc/{provider}/login',
         '/auth/oidc/{provider}/callback',
         '/auth/token',
@@ -307,6 +493,9 @@ describe('AuthController & AuthModule', () => {
         '/auth/logout',
       ]),
     );
+    expect(document.components?.schemas).toHaveProperty('GoogleAuthDto');
+    expect(document.components?.schemas).toHaveProperty('RefreshTokenDto');
+    expect(document.components?.schemas).toHaveProperty('LogoutDto');
     expect(document.components?.schemas).toHaveProperty(
       'AccessTokenResponseDto',
     );
