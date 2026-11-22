@@ -135,6 +135,7 @@ curl http://localhost:3000/todos
 | `GET`    | `/`                           | Public  | Hello World endpoint                                |
 | `GET`    | `/health`                     | Public  | Check database connectivity                         |
 | `GET`    | `/docs`                       | Public  | Interactive Swagger UI                              |
+| `GET`    | `/docs-json`                  | Public  | Raw OpenAPI 3.0 JSON specification                  |
 | `POST`   | `/auth/google`                | Public  | Exchange a Google ID token for access + refresh tokens |
 | `POST`   | `/auth/refresh`               | Public  | Rotate a refresh token (body or cookie) for a fresh token pair |
 | `GET`    | `/auth/oidc/:provider/login`  | Public  | Initiate Google OAuth/OIDC sign-in                  |
@@ -309,6 +310,77 @@ Best for same-site browser SPAs:
 Leave both headers and the request body blank — the endpoint clears the active browser session cookie.
 
 > **Note for Swagger UI & SPAs:** `accessToken` JWTs are stateless until their 15-minute expiry. After calling `POST /auth/logout`, also discard the in-memory `accessToken` in your SPA (or click **Authorize → Logout** in Swagger UI).
+
+## Generating TypeScript Types for a Frontend SPA (`openapi-typescript`)
+
+Swagger (`SwaggerModule.setup('docs', ...)` in `src/main.ts`) automatically exposes the OpenAPI JSON spec at `http://localhost:3000/docs-json` (and YAML at `/docs-yaml`), including all request/response DTO models under `components.schemas`.
+
+### 1. Start the API and configure CORS
+
+Make sure the API is running (`pnpm start:dev`) and allow your frontend origin in `.env`:
+
+```env
+CORS_ORIGINS=http://localhost:5173
+```
+
+### 2. Install `openapi-typescript` in your SPA
+
+```bash
+pnpm add -D openapi-typescript
+```
+
+### 3. Generate TypeScript definitions from `/docs-json`
+
+```bash
+pnpm exec openapi-typescript http://localhost:3000/docs-json -o src/api/schema.d.ts
+```
+
+Add a script to your SPA's `package.json` so you can re-run it whenever backend DTOs or routes change:
+
+```json
+{
+  "scripts": {
+    "api:types": "openapi-typescript http://localhost:3000/docs-json -o src/api/schema.d.ts"
+  }
+}
+```
+
+### 4. Use the generated models in React
+
+Re-export the generated schema types (or extend them as interfaces) from a shared file such as `src/api/types.ts`:
+
+```ts
+import type { components } from './schema';
+
+export type Todo = components['schemas']['TodoDto'];
+export type CreateTodo = components['schemas']['CreateTodoDto'];
+export type UpdateTodo = components['schemas']['UpdateTodoDto'];
+export type AuthUser = components['schemas']['AuthUserDto'];
+export type GoogleAuthRequest = components['schemas']['GoogleAuthDto'];
+export type RefreshTokenRequest = components['schemas']['RefreshTokenDto'];
+export type LogoutRequest = components['schemas']['LogoutDto'];
+export type AccessTokenResponse = components['schemas']['AccessTokenResponseDto'];
+```
+
+### Optional: End-to-end typed requests with `openapi-fetch`
+
+Pair the generated `paths` type with [`openapi-fetch`](https://openapi-ts.dev/openapi-fetch/) for type-safe API calls without manual fetch wrappers:
+
+```bash
+pnpm add openapi-fetch
+```
+
+```ts
+import createClient from 'openapi-fetch';
+import type { paths } from './schema';
+
+export const api = createClient<paths>({
+  baseUrl: 'http://localhost:3000',
+  credentials: 'include',
+});
+
+const { data: todos } = await api.GET('/todos');
+```
 
 ## Migrating Schema Changes to Remote Cloud SQL via `db:proxy`
 
