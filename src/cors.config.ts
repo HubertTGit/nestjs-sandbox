@@ -14,7 +14,7 @@ export function parseCorsOrigins(raw?: string): string[] {
     ),
   ];
 }
-
+//build cors options from 
 export function buildCorsOptions(rawOrigins?: string): CorsOptions | null {
   const origins = parseCorsOrigins(rawOrigins);
   if (origins.length === 0) {
